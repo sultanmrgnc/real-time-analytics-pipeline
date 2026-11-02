@@ -1,106 +1,138 @@
 # Streaming Pipeline - Real-time Event Processing
 
-Real-time event aggregation system untuk memproses dan menganalisis data streaming dengan producer-consumer pattern menggunakan threading.
+Simulasi sistem streaming data untuk memproses event e-commerce secara real-time. Project ini mendemonstrasikan bagaimana producer-consumer pattern bekerja dengan threading untuk handle data streaming.
 
-## Features
+## Apa yang Dilakukan Project Ini?
 
-- **Producer**: Generate event streaming kontinyu (order_placed, payment_confirmed, order_shipped, order_delivered)
-- **Consumer**: Aggregate events dalam time windows
-- **Real-time Analytics**: Total revenue, events per second, distribution by city & event type
-- **Anomaly Detection**: Identifikasi kota dengan total revenue melebihi threshold
-- **Visualisasi**: ASCII charts dan text-based reporting (dengan opsi plotext untuk grafik lebih baik)
+Project ini mensimulasikan:
+1. **Toko online** yang generate transaksi terus-menerus (order placed, payment confirmed, shipped, delivered)
+2. **System analytics** yang aggregate data secara real-time
+3. **Anomaly detection** untuk deteksi kota dengan revenue tinggi
+4. **Dashboard sederhana** untuk lihat hasil analisis
 
-## Architecture
+## Cara Pakai
 
-```
-Producer Thread → Event Queue (10k size) → Consumer Thread
-                                              ↓
-                                    Aggregation State
-                                              ↓
-                        Analytics & Anomaly Detection
-```
+### 1. Pastikan Python Terinstall
 
-## Requirements
-
-```
-Python 3.8+
-plotext (optional, untuk visualisasi grafik)
+Cek versi Python (minimal 3.8):
+```bash
+python --version
 ```
 
-## Installation
+### 2. Clone atau Download Project
 
 ```bash
-pip install plotext  # optional
+git clone <repo-url>
+cd stream_pipeline
 ```
 
-## Usage
+### 3. (Optional) Install Library untuk Grafik Lebih Bagus
+
+```bash
+pip install plotext
+```
+
+Kalau skip step ini juga gpp, visualisasi tetap jalan tapi text-based aja.
+
+### 4. Jalankan Script
 
 ```bash
 python stream_pipeline.py
 ```
 
-### Custom Configuration
+Tunggu 30 detik, script akan:
+- Generate 20 events per detik
+- Aggregate data setiap 3 detik
+- Tampilkan summary di akhir
 
-Edit class `Config` di `stream_pipeline.py`:
+## Cara Ubah Konfigurasi
+
+Buka file `stream_pipeline.py`, cari class `Config` di bagian atas:
 
 ```python
 class Config:
-    QUEUE_SIZE = 10000
-    QUEUE_TIMEOUT = 0.1
-    DEFAULT_DURATION = 30              # durasi pipeline (detik)
-    DEFAULT_EVENTS_PER_SEC = 20        # event generation rate
-    WINDOW_SECONDS = 3                 # agregasi window size
-    ANOMALY_THRESHOLD = 300000         # threshold revenue anomali (Rp)
+    DEFAULT_DURATION = 30              # berapa lama program jalan (detik)
+    DEFAULT_EVENTS_PER_SEC = 20        # berapa event per detik di-generate
+    WINDOW_SECONDS = 3                 # setiap berapa detik aggregate data
+    ANOMALY_THRESHOLD = 300000         # batas revenue dianggap anomali (Rp300rb)
 ```
 
-## Output
+Ubah angka sesuai kebutuhan, save, terus jalankan ulang.
 
-### Summary Metrics
-- Total events processed
+## Output yang Dihasilkan
+
+Setelah jalan, kamu akan lihat:
+
+### 1. Log Real-time
+```
+2026-11-02 12:00:01 - INFO - Producer started: 20 events/sec for 30s
+2026-11-02 12:00:04 - INFO - Window: 60 events (20.0 events/sec) | Total revenue: Rp15.234.567
+```
+
+### 2. Summary Metrics
+- Total event yang diproses
 - Total revenue (format Rupiah)
-- Average events/second
-- Top city by revenue
-- Most frequent event type
+- Rata-rata events per detik
+- Kota dengan revenue tertinggi
+- Event type paling sering muncul
 
-### Event Distribution
-Breakdown by event type dengan percentage & visual bar chart
+### 3. Event Distribution
+Breakdown berapa kali tiap event terjadi (order_placed, payment_confirmed, dll) dengan bar chart sederhana
 
-### Revenue by City
-Detail breakdown revenue per kota dengan average order value
+### 4. Revenue by City
+Detail revenue per kota (Jakarta, Bandung, Surabaya, Medan, Bali) plus rata-rata nilai order
 
-### Anomaly Detection
-Identifikasi kota yang melampaui threshold revenue
+### 5. Anomaly Detection
+Kota mana aja yang punya total revenue di atas threshold
 
-## Example Run
+## Cara Kerja Technical
 
 ```
-2026-11-02 05:43:01,027 - INFO - Starting streaming pipeline...
-2026-11-02 05:43:01,028 - INFO - Producer started: 20 events/sec for 30s
-2026-11-02 05:43:01,029 - INFO - Consumer started: aggregating every 3s window
-2026-11-02 05:43:04,030 - INFO - Window: 60 events (20.0 events/sec) | Total revenue: Rp1.200.000.000
-...
-2026-11-02 05:43:31,050 - INFO - SUMMARY METRICS
-2026-11-02 05:43:31,050 - INFO - Total Events Processed : 600
-2026-11-02 05:43:31,050 - INFO - Total Revenue          : Rp10.500.000.000
+Producer Thread                Consumer Thread
+     │                              │
+     ├─ Generate event ────────────>│
+     │  (order info)                │
+     │                              ├─ Aggregate
+     │                              │  (hitung total, avg, dll)
+     │                              │
+     └─ [Queue 10k size] ──────────>└─ Simpan ke state
+                                          │
+                                          └─ Analytics & Report
 ```
 
-## Cities & Event Types
+**Producer** = thread yang generate event terus-menerus
+**Queue** = antrian untuk simpan event sementara (thread-safe)
+**Consumer** = thread yang ambil event dari queue dan proses
+**State** = tempat simpan hasil agregasi
 
-**Cities**: Jakarta, Bandung, Surabaya, Medan, Bali
+## Data yang Di-generate
 
-**Event Types**: order_placed, payment_confirmed, order_shipped, order_delivered
+**Event Types:**
+- `order_placed` - order baru masuk
+- `payment_confirmed` - pembayaran berhasil
+- `order_shipped` - barang dikirim
+- `order_delivered` - barang sampai
 
-## Thread Safety
+**Cities:** Jakarta, Bandung, Surabaya, Medan, Bali
 
-- Event queue menggunakan `Queue` (thread-safe)
-- State updates tanpa explicit locking (single consumer pattern)
-- Graceful shutdown dengan `Event` flag
+**Order Value:** Random antara Rp10.000 - Rp500.000
 
-## Logging
+## Troubleshooting
 
-Semua aktivitas dicatat via Python logging dengan format:
-```
-%(asctime)s - %(levelname)s - %(message)s
-```
+**Program error atau crash?**
+- Pastikan Python 3.8+
+- Coba jalankan ulang
 
-Level: INFO, WARNING, ERROR
+**Mau stop program di tengah jalan?**
+- Tekan `Ctrl+C`
+
+**Mau data lebih banyak/sedikit?**
+- Ubah `DEFAULT_DURATION` dan `DEFAULT_EVENTS_PER_SEC` di Config
+
+## Use Case
+
+Project ini cocok buat:
+- Belajar streaming data processing
+- Demo producer-consumer pattern
+- Contoh multi-threading di Python
+- Base code untuk real streaming system (Kafka, Spark Streaming, dll)
