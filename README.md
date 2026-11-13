@@ -1,138 +1,150 @@
-# Streaming Pipeline - Real-time Event Processing
+# Streaming Pipeline - Real-Time Event Processing
 
-Simulasi sistem streaming data untuk memproses event e-commerce secara real-time. Project ini mendemonstrasikan bagaimana producer-consumer pattern bekerja dengan threading untuk handle data streaming.
+A real-time data streaming simulation that processes e-commerce events. This project demonstrates how the producer-consumer pattern and threading can be used to handle streaming data.
 
-## Apa yang Dilakukan Project Ini?
+## What Does This Project Do?
 
-Project ini mensimulasikan:
-1. **Toko online** yang generate transaksi terus-menerus (order placed, payment confirmed, shipped, delivered)
-2. **System analytics** yang aggregate data secara real-time
-3. **Anomaly detection** untuk deteksi kota dengan revenue tinggi
-4. **Dashboard sederhana** untuk lihat hasil analisis
+This project simulates:
+1. An **online store** continuously generating transaction events (`order_placed`, `payment_confirmed`, `order_shipped`, and `order_delivered`)
+2. An **analytics system** aggregating data in real time
+3. **Anomaly detection** for cities with unusually high revenue
+4. A **simple dashboard** displaying analysis results
 
-## Cara Pakai
+## Getting Started
 
-### 1. Pastikan Python Terinstall
+### 1. Verify Python Installation
 
-Cek versi Python (minimal 3.8):
+Check that Python 3.8 or newer is installed:
+
 ```bash
 python --version
 ```
 
-### 2. Clone atau Download Project
+### 2. Clone or Download the Project
 
 ```bash
 git clone <repo-url>
 cd stream_pipeline
 ```
 
-### 3. (Optional) Install Library untuk Grafik Lebih Bagus
+### 3. Optional: Install Enhanced Chart Support
 
 ```bash
 pip install plotext
 ```
 
-Kalau skip step ini juga gpp, visualisasi tetap jalan tapi text-based aja.
+Without this dependency, the application still works using text-based visualizations.
 
-### 4. Jalankan Script
+### 4. Run the Application
 
 ```bash
 python stream_pipeline.py
 ```
 
-Tunggu 30 detik, script akan:
-- Generate 20 events per detik
-- Aggregate data setiap 3 detik
-- Tampilkan summary di akhir
+By default, the application runs for 30 seconds and will:
+- Generate 20 events per second
+- Aggregate data every 3 seconds
+- Display a final analytics summary
 
-## Cara Ubah Konfigurasi
+## Configuration
 
-Buka file `stream_pipeline.py`, cari class `Config` di bagian atas:
+Open `stream_pipeline.py` and locate the `Config` class near the top of the file:
 
 ```python
 class Config:
-    DEFAULT_DURATION = 30              # berapa lama program jalan (detik)
-    DEFAULT_EVENTS_PER_SEC = 20        # berapa event per detik di-generate
-    WINDOW_SECONDS = 3                 # setiap berapa detik aggregate data
-    ANOMALY_THRESHOLD = 300000         # batas revenue dianggap anomali (Rp300rb)
+    DEFAULT_DURATION = 30              # Runtime in seconds
+    DEFAULT_EVENTS_PER_SEC = 20        # Events generated per second
+    WINDOW_SECONDS = 3                 # Aggregation window in seconds
+    ANOMALY_THRESHOLD = 300000         # Revenue anomaly threshold (IDR 300,000)
 ```
 
-Ubah angka sesuai kebutuhan, save, terus jalankan ulang.
+Change the values as needed, save the file, and run the application again.
 
-## Output yang Dihasilkan
+## Output
 
-Setelah jalan, kamu akan lihat:
+### 1. Real-Time Logs
 
-### 1. Log Real-time
-```
+```text
 2026-11-02 12:00:01 - INFO - Producer started: 20 events/sec for 30s
 2026-11-02 12:00:04 - INFO - Window: 60 events (20.0 events/sec) | Total revenue: Rp15.234.567
 ```
 
 ### 2. Summary Metrics
-- Total event yang diproses
-- Total revenue (format Rupiah)
-- Rata-rata events per detik
-- Kota dengan revenue tertinggi
-- Event type paling sering muncul
+
+- Total events processed
+- Total revenue in Indonesian Rupiah
+- Average events processed per second
+- City with the highest revenue
+- Most frequent event type
 
 ### 3. Event Distribution
-Breakdown berapa kali tiap event terjadi (order_placed, payment_confirmed, dll) dengan bar chart sederhana
+
+A breakdown of each event type, including `order_placed` and `payment_confirmed`, displayed as a simple bar chart.
 
 ### 4. Revenue by City
-Detail revenue per kota (Jakarta, Bandung, Surabaya, Medan, Bali) plus rata-rata nilai order
+
+Revenue details for Jakarta, Bandung, Surabaya, Medan, and Bali, including the average order value.
 
 ### 5. Anomaly Detection
-Kota mana aja yang punya total revenue di atas threshold
 
-## Cara Kerja Technical
+A list of cities whose total revenue exceeds the configured anomaly threshold.
 
-```
+## Architecture
+
+```text
 Producer Thread                Consumer Thread
      │                              │
      ├─ Generate event ────────────>│
-     │  (order info)                │
+     │  (order information)         │
      │                              ├─ Aggregate
-     │                              │  (hitung total, avg, dll)
+     │                              │  (total, average, etc.)
      │                              │
-     └─ [Queue 10k size] ──────────>└─ Simpan ke state
+     └─ [Queue: 10k capacity] ─────>└─ Store in state
                                           │
-                                          └─ Analytics & Report
+                                          └─ Analytics and reporting
 ```
 
-**Producer** = thread yang generate event terus-menerus
-**Queue** = antrian untuk simpan event sementara (thread-safe)
-**Consumer** = thread yang ambil event dari queue dan proses
-**State** = tempat simpan hasil agregasi
+- **Producer:** Continuously generates events
+- **Queue:** Temporarily stores events in a thread-safe structure
+- **Consumer:** Retrieves and processes events from the queue
+- **State:** Stores aggregation results
 
-## Data yang Di-generate
+## Generated Data
 
-**Event Types:**
-- `order_placed` - order baru masuk
-- `payment_confirmed` - pembayaran berhasil
-- `order_shipped` - barang dikirim
-- `order_delivered` - barang sampai
+### Event Types
 
-**Cities:** Jakarta, Bandung, Surabaya, Medan, Bali
+- `order_placed` - A new order is created
+- `payment_confirmed` - Payment is completed
+- `order_shipped` - The order is shipped
+- `order_delivered` - The order is delivered
 
-**Order Value:** Random antara Rp10.000 - Rp500.000
+### Cities
+
+Jakarta, Bandung, Surabaya, Medan, and Bali.
+
+### Order Value
+
+Random values between IDR 10,000 and IDR 500,000.
 
 ## Troubleshooting
 
-**Program error atau crash?**
-- Pastikan Python 3.8+
-- Coba jalankan ulang
+### The application crashes or reports an error
 
-**Mau stop program di tengah jalan?**
-- Tekan `Ctrl+C`
+- Verify that Python 3.8 or newer is installed
+- Restart the application
 
-**Mau data lebih banyak/sedikit?**
-- Ubah `DEFAULT_DURATION` dan `DEFAULT_EVENTS_PER_SEC` di Config
+### Stop the application before completion
 
-## Use Case
+Press `Ctrl+C`.
 
-Project ini cocok buat:
-- Belajar streaming data processing
-- Demo producer-consumer pattern
-- Contoh multi-threading di Python
-- Base code untuk real streaming system (Kafka, Spark Streaming, dll)
+### Generate more or fewer events
+
+Change `DEFAULT_DURATION` and `DEFAULT_EVENTS_PER_SEC` in the `Config` class.
+
+## Use Cases
+
+This project is suitable for:
+- Learning stream-processing fundamentals
+- Demonstrating the producer-consumer pattern
+- Practicing multithreading in Python
+- Serving as a foundation for Kafka, Spark Streaming, or similar systems
