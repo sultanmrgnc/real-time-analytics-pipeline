@@ -1,6 +1,7 @@
 import time
 import random
 import logging
+from math import isfinite
 from datetime import datetime
 from queue import Queue, Empty
 from threading import Thread, Event
@@ -32,11 +33,14 @@ class StreamingPipeline:
             'events_by_type': defaultdict(int),
             'events_by_city': defaultdict(int),
             'revenue_by_city': defaultdict(float),
+            'payments_by_city': defaultdict(int),
             'events_per_second': [],
             'timestamps': [],
-            'cumulative_revenue': []
+            'cumulative_revenue': [],
+            'revenue_alerts': []
         }
         self.shutdown_event = Event()
+        self.producer_done = Event()
 
     @staticmethod
     def format_rupiah(value: float) -> str:
@@ -46,80 +50,108 @@ class StreamingPipeline:
 
     def produce_events(self, duration_seconds: int, events_per_sec: int) -> None:
         logger.info(f"Producer started: {events_per_sec} events/sec for {duration_seconds}s")
-        start = time.time()
-        event_id = 1
+        try:
+            start = time.monotonic()
+            event_id = 1
+            while time.monotonic() - start < duration_seconds and not self.shutdown_event.is_set():
+                event = {
+                    'event_id': event_id,
+                    'timestamp': datetime.now(),
+                    'event_type': random.choice(EVENT_TYPES),
+                    'city': random.choice(CITIES),
+                    'order_value': round(random.uniform(10000, 500000), 2),
+                    'user_id': random.randint(1000, 9999)
+                }
+                try:
+                    self.event_queue.put(event, timeout=0.5)
+                    event_id += 1
+                except Exception as e:
+                    logger.warning(f"Queue full, dropping event: {e}")
+                self.shutdown_event.wait(min(1.0 / events_per_sec, max(0, duration_seconds - (time.monotonic() - start))))
+        finally:
+            self.producer_done.set()
+            logger.info("Producer stopped")
 
-        while time.time() - start < duration_seconds and not self.shutdown_event.is_set():
-            event = {
-                'event_id': event_id,
-                'timestamp': datetime.now(),
-                'event_type': random.choice(EVENT_TYPES),
-                'city': random.choice(CITIES),
-                'order_value': round(random.uniform(10000, 500000), 2),
-                'user_id': random.randint(1000, 9999)
-            }
-            try:
-                self.event_queue.put(event, timeout=0.5)
-                event_id += 1
-            except Exception as e:
-                logger.warning(f"Queue full, dropping event: {e}")
+    def flush_window(self, window_count: int, window_revenue: Dict[str, float], elapsed: float, final: bool = False) -> None:
+        if not window_count:
+            return
+        eps = window_count / max(elapsed, 0.001)
+        alerts = [
+            {'city': city, 'revenue': revenue}
+            for city, revenue in window_revenue.items()
+            if revenue > Config.ANOMALY_THRESHOLD
+        ]
+        self.state['events_per_second'].append(eps)
+        self.state['timestamps'].append(datetime.now())
+        self.state['cumulative_revenue'].append(self.state['total_revenue'])
+        self.state['revenue_alerts'].extend(alerts)
+        label = 'Final window' if final else 'Window'
+        logger.info(f"{label}: {window_count} events ({eps:.1f} events/sec) | Confirmed revenue: {self.format_rupiah(sum(window_revenue.values()))}")
+        for alert in alerts:
+            logger.warning(f"Revenue threshold alert: {alert['city']} reached {self.format_rupiah(alert['revenue'])} in this window")
 
-            time.sleep(1.0 / events_per_sec)
-
-        logger.info("Producer stopped")
-
-    def consume_and_aggregate(self, duration_seconds: int) -> None:
+    def consume_and_aggregate(self) -> None:
         logger.info(f"Consumer started: aggregating every {Config.WINDOW_SECONDS}s window")
-        start = time.time()
-        window_start = time.time()
+        window_start = time.monotonic()
         window_count = 0
+        window_revenue = defaultdict(float)
 
-        while time.time() - start < duration_seconds and not self.shutdown_event.is_set():
+        while True:
+            if self.producer_done.is_set() and self.event_queue.empty():
+                break
+
             try:
                 event = self.event_queue.get(timeout=Config.QUEUE_TIMEOUT)
 
                 self.state['total_events'] += 1
-                self.state['total_revenue'] += event['order_value']
                 self.state['events_by_type'][event['event_type']] += 1
                 self.state['events_by_city'][event['city']] += 1
-                self.state['revenue_by_city'][event['city']] += event['order_value']
+                if event['event_type'] == 'payment_confirmed':
+                    self.state['total_revenue'] += event['order_value']
+                    self.state['revenue_by_city'][event['city']] += event['order_value']
+                    self.state['payments_by_city'][event['city']] += 1
+                    window_revenue[event['city']] += event['order_value']
                 window_count += 1
 
-                if time.time() - window_start >= Config.WINDOW_SECONDS:
-                    eps = window_count / Config.WINDOW_SECONDS
-                    self.state['events_per_second'].append(eps)
-                    self.state['timestamps'].append(datetime.now())
-                    self.state['cumulative_revenue'].append(self.state['total_revenue'])
-
-                    logger.info(
-                        f"Window: {window_count} events ({eps:.1f} events/sec) | "
-                        f"Total revenue: {self.format_rupiah(self.state['total_revenue'])}"
-                    )
+                elapsed = time.monotonic() - window_start
+                if elapsed >= Config.WINDOW_SECONDS:
+                    self.flush_window(window_count, window_revenue, elapsed)
                     window_count = 0
-                    window_start = time.time()
+                    window_revenue.clear()
+                    window_start = time.monotonic()
 
             except Empty:
-                pass
+                elapsed = time.monotonic() - window_start
+                if elapsed >= Config.WINDOW_SECONDS:
+                    self.flush_window(window_count, window_revenue, elapsed)
+                    window_count = 0
+                    window_revenue.clear()
+                    window_start = time.monotonic()
             except Exception as e:
                 logger.error(f"Error processing event: {e}")
 
+        self.flush_window(window_count, window_revenue, time.monotonic() - window_start, final=True)
+
         logger.info("Consumer stopped")
 
-    def run(self, duration: int = Config.DEFAULT_DURATION, events_per_sec: int = Config.DEFAULT_EVENTS_PER_SEC) -> Dict[str, Any]:
+    def run(self, duration: float = Config.DEFAULT_DURATION, events_per_sec: float = Config.DEFAULT_EVENTS_PER_SEC) -> Dict[str, Any]:
+        if not all(isfinite(value) and value > 0 for value in (duration, events_per_sec, Config.WINDOW_SECONDS)):
+            raise ValueError("duration, events_per_sec, and WINDOW_SECONDS must be finite and positive")
         logger.info("Starting streaming pipeline...")
-
         producer_thread = Thread(target=self.produce_events, args=(duration, events_per_sec), daemon=False)
-        consumer_thread = Thread(target=self.consume_and_aggregate, args=(duration,), daemon=False)
-
+        consumer_thread = Thread(target=self.consume_and_aggregate, daemon=False)
+        producer_thread.start()
+        consumer_thread.start()
         try:
-            producer_thread.start()
-            consumer_thread.start()
-
-            producer_thread.join(timeout=duration + 5)
-            consumer_thread.join(timeout=duration + 5)
-        finally:
+            while producer_thread.is_alive():
+                producer_thread.join(timeout=0.1)
+        except KeyboardInterrupt:
+            logger.info("Shutdown requested")
             self.shutdown_event.set()
-
+        finally:
+            producer_thread.join()
+            self.producer_done.set()
+            consumer_thread.join()
         logger.info("Pipeline completed")
         return self.state
 
@@ -131,9 +163,10 @@ class StreamingPipeline:
         logger.info(f"Total Revenue          : {self.format_rupiah(self.state['total_revenue'])}")
         logger.info(f"Avg Events/sec         : {self.state['total_events']/duration:.1f}")
 
-        if self.state['total_events'] > 0:
-            avg_order = self.state['total_revenue'] / self.state['total_events']
-            logger.info(f"Avg Order Value        : {self.format_rupiah(avg_order)}")
+        payment_count = self.state['events_by_type']['payment_confirmed']
+        if payment_count > 0:
+            avg_order = self.state['total_revenue'] / payment_count
+            logger.info(f"Avg Payment Value      : {self.format_rupiah(avg_order)}")
 
         if self.state['revenue_by_city']:
             top_city = max(self.state['revenue_by_city'], key=self.state['revenue_by_city'].get)
@@ -143,42 +176,20 @@ class StreamingPipeline:
             top_event = max(self.state['events_by_type'], key=self.state['events_by_type'].get)
             logger.info(f"Most Frequent Event    : {top_event} ({self.state['events_by_type'][top_event]} events)")
 
-    def detect_anomalies(self, threshold: int = Config.ANOMALY_THRESHOLD) -> List[Dict[str, Any]]:
+    def print_revenue_alerts(self) -> List[Dict[str, Any]]:
         logger.info("=" * 70)
-        logger.info(f"ANOMALY DETECTION (Threshold: {self.format_rupiah(threshold)})")
+        logger.info(f"PER-WINDOW REVENUE ALERTS (Threshold: {self.format_rupiah(Config.ANOMALY_THRESHOLD)})")
         logger.info("=" * 70)
-
-        anomalies = []
-        for city, revenue in self.state['revenue_by_city'].items():
-            if revenue > threshold:
-                events_count = self.state['events_by_city'][city]
-                anomalies.append({
-                    'city': city,
-                    'total_revenue': revenue,
-                    'avg_order': revenue / events_count if events_count > 0 else 0
-                })
-
-        if anomalies:
-            anomalies_sorted = sorted(anomalies, key=lambda x: x['total_revenue'], reverse=True)
-            logger.info(f"Found {len(anomalies)} city/cities with high revenue:")
-            for a in anomalies_sorted:
-                logger.info(
-                    f"  {a['city']:<15} Total: {self.format_rupiah(a['total_revenue']):<25} "
-                    f"Avg: {self.format_rupiah(a['avg_order'])}"
-                )
+        alerts = self.state['revenue_alerts']
+        if alerts:
+            logger.info(f"Triggered {len(alerts)} alert(s):")
+            for alert in alerts:
+                logger.info(f"  {alert['city']:<15} Window revenue: {self.format_rupiah(alert['revenue'])}")
         else:
-            logger.info("No anomalies detected")
-
-        return anomalies
+            logger.info("No revenue threshold alerts triggered")
+        return alerts
 
     def visualize_results(self) -> None:
-        try:
-            import plotext as plt
-        except ImportError:
-            logger.warning("plotext not installed. Install with: pip install plotext")
-            logger.info("Showing text-based visualization only")
-            plt = None
-
         logger.info("=" * 70)
         logger.info("ANALYTICS DASHBOARD")
         logger.info("=" * 70)
@@ -194,13 +205,13 @@ class StreamingPipeline:
         if self.state['revenue_by_city']:
             logger.info("\nRevenue by City (Detail):")
             logger.info("-" * 80)
-            logger.info(f"{'City':<15} {'Total Revenue':<25} {'Events':<10} {'Avg Order':<20}")
+            logger.info(f"{'City':<15} {'Total Revenue':<25} {'Payments':<10} {'Avg Payment':<20}")
             logger.info("-" * 80)
             for city in sorted(self.state['revenue_by_city'].keys(), 
                               key=lambda x: self.state['revenue_by_city'][x], 
                               reverse=True):
                 total_rev = self.state['revenue_by_city'][city]
-                events_count = self.state['events_by_city'][city]
+                events_count = self.state['payments_by_city'][city]
                 avg_order = total_rev / events_count if events_count > 0 else 0
 
                 logger.info(f"{city:<15} {self.format_rupiah(total_rev):<25} {events_count:<10} {self.format_rupiah(avg_order):<20}")
@@ -212,10 +223,10 @@ def main() -> None:
     duration = Config.DEFAULT_DURATION
     events_per_sec = Config.DEFAULT_EVENTS_PER_SEC
 
-    state = pipeline.run(duration=duration, events_per_sec=events_per_sec)
+    pipeline.run(duration=duration, events_per_sec=events_per_sec)
 
     pipeline.print_summary(duration)
-    pipeline.detect_anomalies(threshold=Config.ANOMALY_THRESHOLD)
+    pipeline.print_revenue_alerts()
     pipeline.visualize_results()
 
     logger.info("All done!")
